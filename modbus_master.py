@@ -17,12 +17,23 @@ instrument.debug = False
 
 print(f"{PORT} is opened for MB Master\n")
 
-while True:
-    try:
-        value = instrument.read_register(2, 1, functioncode=3)
-        print(f"OK, value: {value}")
-        
-    except Exception as e:
-        print(f"Error: No data: {e}")
-    
-    time.sleep(2)
+try:
+    while True:
+        try:
+            value = instrument.read_register(1, 0, functioncode=3)
+            print(f"40001: {value}")
+            time.sleep(0.1)
+            value = instrument.read_register(2, 0, functioncode=3)
+            print(f"40002: {value}")
+            time.sleep(0.1)
+            val_coil = instrument.read_bit(1, functioncode=1)
+            print(f"Coil 00001: {val_coil}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error: No data: {e}")
+            time.sleep(2)
+except KeyboardInterrupt:
+    print("Program stoppped.")
+finally:
+    instrument.serial.close()
+    print("Port closed")
