@@ -2,7 +2,7 @@ import minimalmodbus
 import time
 
 SLAVE_ID = 3
-PORT = 'COM11'
+PORT = 'COM25'
 
 instrument = minimalmodbus.Instrument(PORT, SLAVE_ID)
 
@@ -15,19 +15,17 @@ instrument.mode = minimalmodbus.MODE_RTU
 
 instrument.debug = False
 
+holding_start_addr = 4295
+
 print(f"{PORT} is opened for MB Master\n")
 
 try:
     while True:
         try:
-            value = instrument.read_register(1, 0, functioncode=3)
-            print(f"40001: {value}")
-            time.sleep(0.1)
-            value = instrument.read_register(2, 0, functioncode=3)
-            print(f"40002: {value}")
-            time.sleep(0.1)
-            val_coil = instrument.read_bit(1, functioncode=1)
-            print(f"Coil 00001: {val_coil}")
+            for i in range (0, 12, 1):
+                value = instrument.read_register(holding_start_addr+i, 0, functioncode=3)
+                print(f"{holding_start_addr+i}: {value}")
+                time.sleep(0.02)
             time.sleep(0.5)
         except Exception as e:
             print(f"Error: No data: {e}")
