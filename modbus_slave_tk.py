@@ -3,12 +3,17 @@ import modbus_tk.defines as cst
 from modbus_tk import modbus_rtu
 import random
 import time
+import sys
 
 SLAVE_ID = 3
 PORT = 'COM24'
 
-ser = serial.Serial(port=PORT, baudrate=115200)
-
+try:
+    ser = serial.Serial(port=PORT, baudrate=115200)
+except:
+    print("Port connection error. Closed !!!\r\n")
+    sys.exit()
+    
 server = modbus_rtu.RtuServer(ser)
 
 slave_mb = server.add_slave(SLAVE_ID)

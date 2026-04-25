@@ -1,19 +1,24 @@
+import customtkinter as ctk
 import minimalmodbus
+import threading
 import time
+import sys
 
 SLAVE_ID = 3
 PORT = 'COM25'
 
-instrument = minimalmodbus.Instrument(PORT, SLAVE_ID)
-
-instrument.serial.baudrate = 115200
-instrument.serial.bytesize = 8
-instrument.serial.parity   = minimalmodbus.serial.PARITY_NONE
-instrument.serial.stopbits = 1
-instrument.serial.timeout  = 0.5
-instrument.mode = minimalmodbus.MODE_RTU
-
-instrument.debug = False
+try:
+    instrument = minimalmodbus.Instrument(PORT, SLAVE_ID)
+    instrument.serial.baudrate = 115200
+    instrument.serial.bytesize = 8
+    instrument.serial.parity   = minimalmodbus.serial.PARITY_NONE
+    instrument.serial.stopbits = 1
+    instrument.serial.timeout  = 0.5
+    instrument.mode = minimalmodbus.MODE_RTU
+    instrument.debug = False
+except:
+    print("Port connection error. Closed !!!\r\n")
+    sys.exit()
 
 holding_start_addr = 4295
 
