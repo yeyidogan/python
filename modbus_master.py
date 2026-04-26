@@ -64,19 +64,23 @@ class ModbusGUI(ctk.CTk):
             err_label.pack(side="right", padx=10)
             self.error_labels.append(err_label)
 
+        self.err_msg_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.err_msg_frame.pack(pady=10, fill="x", padx=40)
+        self.err_msg_frame_status = ctk.CTkLabel(self.err_msg_frame, text="Modbus exception messages", 
+                                        font=("Arial", 14), text_color="green",
+                                        wraplength=400, justify = "left")
+        self.err_msg_frame_status.pack(fill="x")
+        
         # read thread
         self.update_thread = threading.Thread(target=self.read_modbus, daemon=True)
         self.update_thread.start()   
 
-    def check_alarm(self, reg_value):
+    def check_alarm(self, reg_addr, reg_value):
         if reg_value >= 10000:
-            self.alarm_status.configure(text="⚠️ OVER RANGE! (Reg 4295)", 
-                                        text_color="white", 
-                                        fg_color="#922b21")
-        else:
-            self.alarm_status.configure(text="Running NormallyL", 
-                                        text_color="green", 
-                                        fg_color="#2b2b2b")
+            self.alarm_status.configure(text=f"⚠️ OVER RANGE! (Reg {reg_addr})", 
+                                        text_color="white", fg_color="#922b21")
+        #else:
+        #    self.alarm_status.configure(text="Running Normally", text_color="white")
 
     def read_modbus(self):
         while True:
@@ -87,13 +91,15 @@ class ModbusGUI(ctk.CTk):
                     print(f"{holding_start_addr+i}: {value}")
                     self.answer_cnt[i] += 1
                     self.answer_labels[i].configure(text=f"Answer: {self.answer_cnt[i]}", text_color="green")
-                    self.check_alarm(value)
+                    self.check_alarm(holding_start_addr+i, value)
                     time.sleep(0.02)
-                except:# Exception as e:
+                except Exception as e:
                     #print(f"Error: No data: {e}")
                     self.error_cnt[i] += 1
                     self.error_labels[i].configure(text=f"Error: {self.error_cnt[i]}", text_color="red")
                     self.value_labels[i].configure(text="N/A", text_color="red")
+                    self.err_msg_frame_status.configure(text=f"Exception code: {e} "
+                                                        f"at request # {holding_start_addr+i+1}.")
                     #time.sleep(0.5)
             time.sleep(0.5)
 
