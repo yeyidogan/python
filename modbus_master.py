@@ -5,7 +5,8 @@ import time
 import sys
 
 SLAVE_ID = 3
-PORT = 'COM25'
+#PORT = 'COM25'
+PORT = '/dev/ttyUSB0'
 
 try:
     instrument = minimalmodbus.Instrument(PORT, SLAVE_ID)
@@ -37,6 +38,7 @@ class ModbusGUI(ctk.CTk):
         self.value_labels = []
         #self.label_title = ctk.CTkLabel(self, text="Holding Registers (4295-4304)", font=("Arial", 18, "bold"))
         #self.label_title.pack(pady=20)
+        self.mb_reg_LED = 0
 
         self.alarm_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.alarm_frame.pack(pady=10, fill="x", padx=40)
@@ -89,11 +91,11 @@ class ModbusGUI(ctk.CTk):
                 try:
                     value = instrument.read_register(holding_start_addr+i, 0, functioncode=3)
                     self.value_labels[i].configure(text=str(value))
-                    print(f"{holding_start_addr+i}: {value}")
+                    #print(f"{holding_start_addr+i}: {value}")
                     self.answer_cnt[i] += 1
                     self.answer_labels[i].configure(text=f"Answer: {self.answer_cnt[i]}", text_color="green")
                     self.check_alarm(holding_start_addr+i, value)
-                    time.sleep(0.02)
+                    time.sleep(0.01)
                 except Exception as e:
                     #print(f"Error: No data: {e}")
                     self.error_cnt[i] += 1
@@ -102,7 +104,30 @@ class ModbusGUI(ctk.CTk):
                     self.err_msg_frame_status.configure(text=f"Exception code: {e} "
                                                         f"at request # {holding_start_addr+i+1}.")
                     #time.sleep(0.5)
-            time.sleep(0.5)
+            time.sleep(0.01)
+            if self.mb_reg_LED == 0:
+                try:
+                    instrument.write_register(4307, 0x00, functioncode=6)
+                    time.sleep(0.01)
+                    instrument.write_register(4308, 0x00, functioncode=6)
+                    time.sleep(0.01)
+                    instrument.write_register(4309, 0x00, functioncode=6)
+                    self.mb_reg_LED = 1
+                except:
+                    print("Holding write error !")
+            else:
+                try:
+                    instrument.write_register(4307, 0xFFFF, functioncode=6)
+                    time.sleep(0.01)
+                    instrument.write_register(4308, 0xFFFF, functioncode=6)
+                    time.sleep(0.01)
+                    instrument.write_register(4309, 0xFFFF, functioncode=6)
+                    self.mb_reg_LED = 0
+                except:
+                    print("Holding write 0xFFFF error !")
+            time.sleep(0.01)
+
+
 
 if __name__ == "__main__":
     app = ModbusGUI()
