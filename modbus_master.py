@@ -16,8 +16,9 @@ try:
     instrument.serial.timeout  = 0.5
     instrument.mode = minimalmodbus.MODE_RTU
     instrument.debug = False
-except:
-    print("Port connection error. Closed !!!\r\n")
+except Exception as e:
+    print(f"Port connection error: {e} \r\n")
+    input("Press any key...")
     sys.exit()
 
 holding_start_addr = 4295
