@@ -14,7 +14,7 @@ try:
     instrument.serial.bytesize = 8
     instrument.serial.parity   = minimalmodbus.serial.PARITY_NONE
     instrument.serial.stopbits = 1
-    instrument.serial.timeout  = 0.5
+    instrument.serial.timeout  = 0.1
     instrument.mode = minimalmodbus.MODE_RTU
     instrument.debug = False
 except Exception as e:
@@ -29,7 +29,7 @@ class ModbusGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Modbus Register Monitor & Alarm")
-        self.geometry("500x650")
+        self.geometry("500x500")
 
         self.error_cnt = [0] * 10
         self.error_labels = []
@@ -95,7 +95,7 @@ class ModbusGUI(ctk.CTk):
                     self.answer_cnt[i] += 1
                     self.answer_labels[i].configure(text=f"Answer: {self.answer_cnt[i]}", text_color="green")
                     self.check_alarm(holding_start_addr+i, value)
-                    time.sleep(0.01)
+                    time.sleep(0.002)
                 except Exception as e:
                     #print(f"Error: No data: {e}")
                     self.error_cnt[i] += 1
@@ -108,20 +108,20 @@ class ModbusGUI(ctk.CTk):
             if self.mb_reg_LED == 0:
                 try:
                     instrument.write_register(4307, 0x00, functioncode=6)
-                    time.sleep(0.01)
+                    time.sleep(0.002)
                     instrument.write_register(4308, 0x00, functioncode=6)
-                    time.sleep(0.01)
-                    instrument.write_register(4309, 0x00, functioncode=6)
+                    time.sleep(0.002)
+                    instrument.write_register(4309, 0x01, functioncode=6)
                     self.mb_reg_LED = 1
                 except:
-                    print("Holding write error !")
+                    print("Holding write 0x0000 error !")
             else:
                 try:
                     instrument.write_register(4307, 0xFFFF, functioncode=6)
-                    time.sleep(0.01)
+                    time.sleep(0.005)
                     instrument.write_register(4308, 0xFFFF, functioncode=6)
-                    time.sleep(0.01)
-                    instrument.write_register(4309, 0xFFFF, functioncode=6)
+                    time.sleep(0.005)
+                    instrument.write_register(4309, 0x02, functioncode=6)
                     self.mb_reg_LED = 0
                 except:
                     print("Holding write 0xFFFF error !")
