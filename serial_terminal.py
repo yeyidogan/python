@@ -3,6 +3,7 @@ import serial.tools.list_ports
 import keyboard
 import threading
 import sys
+import pygetwindow as gw
 
 PORT = 'COM25' 
 BAUD = 115200
@@ -31,26 +32,65 @@ def read_from_serial():
 thread_rx = threading.Thread(target=read_from_serial, daemon=True)
 thread_rx.start()
 
+history = []
+history_index = -1
+
 def on_key_event(e):
-    global tx_msg
+    global tx_msg, history, history_index 
+    active_window = gw.getActiveWindow()
+    if active_window is None:
+        return
+    window_title = active_window.title.lower()
+    targets = ["terminal", "visual studio code", "code", "powershell", "cmd"]
+    if not any(target in window_title for target in targets):
+        return
+    
     if e.event_type == keyboard.KEY_DOWN:
         if e.name == 'f1':
+            #ser.write(bytes.fromhex("ffaabbcc"))
             ser.write(b"1234\r\n")
+
         elif e.name == 'f2':
             ser.write(b"'Hello\r\n")
+
         elif e.name == 'enter':
+            clean_msg = tx_msg.strip()
+            if clean_msg:
+                history.append(clean_msg)
             ser.write((tx_msg + '\r\n').encode())
             tx_msg = ""
+            history_index = -1
             print("\n> ", end="", flush=True)
+
         elif e.name == 'backspace':
             tx_msg = tx_msg[:-1]
             print("\b \b", end="", flush=True)
+
         elif len(e.name) == 1:
             tx_msg += e.name
             print(e.name, end="", flush=True)
+
         elif e.name == 'space':
             tx_msg += " "
             print(" ", end="", flush=True)
+        
+        elif e.name == 'up':
+            if len(history) > 0 and history_index < len(history) - 1:
+                history_index += 1
+                print("\r> " + " " * len(tx_msg) + "\r> ", end="", flush=True)
+                tx_msg = history[-(history_index + 1)]
+                print(tx_msg, end="", flush=True)
+
+        elif e.name == 'down':
+            if history_index > 0:
+                history_index -= 1
+                print("\r> " + " " * len(tx_msg) + "\r> ", end="", flush=True)
+                tx_msg = history[-(history_index + 1)]
+                print(tx_msg, end="", flush=True)
+            elif history_index == 0:
+                history_index = -1
+                print("\r> " + " " * len(tx_msg) + "\r> ", end="", flush=True)
+                tx_msg = ""
 
 keyboard.hook(on_key_event)
 
