@@ -1,11 +1,12 @@
 import serial
 import serial.tools.list_ports
-import keyboard
 import threading
 import sys
-import pygetwindow as gw
+import msvcrt
+import time
 
-PORT = 'COM25' 
+# PORT = 'COM7'
+PORT = 'COM25'
 BAUD = 115200
 
 ports = serial.tools.list_ports.comports()
@@ -15,86 +16,92 @@ for port in ports:
 try:
     ser = serial.Serial(PORT, BAUD, timeout=0.1)
     print(f"--- Connected to {PORT}. Press ESC to exit ---")
-except:
-    print(f"{PORT} cannot opened!")
+except Exception as e:
+    print(f"Error: {e}")
     sys.exit()
 
-tx_msg = ""
+state = {"msg": "", "pos": 0, "history": [], "h_idx": -1}
 
-def read_from_serial():
-    global tx_msg
+def redraw():
+    sys.stdout.write('\r' + '> ' + ' ' * (len(state["msg"]) + 10) + '\r')
+    sys.stdout.write('> ' + state["msg"])
+    back = len(state["msg"]) - state["pos"]
+    if back > 0: sys.stdout.write('\b' * back)
+    sys.stdout.flush()
+
+def read_serial():
     while ser.is_open:
-        if ser.in_waiting > 0:
-            data = ser.read(ser.in_waiting).decode(errors='replace')
-            print(f"\r[RX]: {data.strip()}")
-            print(f"> {tx_msg}", end="", flush=True)
+        try:
+            if ser.in_waiting > 0:
+                raw_data = ser.read(ser.in_waiting)
+                data = raw_data.decode(errors='replace')
+                hex_data = raw_data.hex(' ').upper()
+                print(f"\r[RX HEX]: {hex_data}")
+                print(f"\r[RX ASC]: {data.strip()}")
+                redraw()
+            else:
+                time.sleep(0.02)
+        except: break
 
-thread_rx = threading.Thread(target=read_from_serial, daemon=True)
-thread_rx.start()
-
-history = []
-history_index = -1
-
-def on_key_event(e):
-    global tx_msg, history, history_index 
-    active_window = gw.getActiveWindow()
-    if active_window is None:
-        return
-    window_title = active_window.title.lower()
-    targets = ["terminal", "visual studio code", "code", "powershell", "cmd"]
-    if not any(target in window_title for target in targets):
-        return
-    
-    if e.event_type == keyboard.KEY_DOWN:
-        if e.name == 'f1':
-            #ser.write(bytes.fromhex("ffaabbcc"))
-            ser.write(b"1234\r\n")
-
-        elif e.name == 'f2':
-            ser.write(b"'Hello\r\n")
-
-        elif e.name == 'enter':
-            clean_msg = tx_msg.strip()
-            if clean_msg:
-                history.append(clean_msg)
-            ser.write((tx_msg + '\r\n').encode())
-            tx_msg = ""
-            history_index = -1
-            print("\n> ", end="", flush=True)
-
-        elif e.name == 'backspace':
-            tx_msg = tx_msg[:-1]
-            print("\b \b", end="", flush=True)
-
-        elif len(e.name) == 1:
-            tx_msg += e.name
-            print(e.name, end="", flush=True)
-
-        elif e.name == 'space':
-            tx_msg += " "
-            print(" ", end="", flush=True)
-        
-        elif e.name == 'up':
-            if len(history) > 0 and history_index < len(history) - 1:
-                history_index += 1
-                print("\r> " + " " * len(tx_msg) + "\r> ", end="", flush=True)
-                tx_msg = history[-(history_index + 1)]
-                print(tx_msg, end="", flush=True)
-
-        elif e.name == 'down':
-            if history_index > 0:
-                history_index -= 1
-                print("\r> " + " " * len(tx_msg) + "\r> ", end="", flush=True)
-                tx_msg = history[-(history_index + 1)]
-                print(tx_msg, end="", flush=True)
-            elif history_index == 0:
-                history_index = -1
-                print("\r> " + " " * len(tx_msg) + "\r> ", end="", flush=True)
-                tx_msg = ""
-
-keyboard.hook(on_key_event)
+threading.Thread(target=read_serial, daemon=True).start()
 
 print("> ", end="", flush=True)
-keyboard.wait('esc')
+
+while True:
+    if msvcrt.kbhit():
+        ch = msvcrt.getch()
+        
+        # ESC to exit
+        if ch == b'\x1b': break
+
+        # Special keys
+        elif ch in [b'\x00', b'\xe0']:
+            ch2 = msvcrt.getch()
+            if ch2 == b'K': # Left
+                state["pos"] = max(0, state["pos"] - 1)
+            elif ch2 == b'M': # Right
+                state["pos"] = min(len(state["msg"]), state["pos"] + 1)
+            elif ch2 == b'H': # Up
+                if len(state["history"]) > 0 and state["h_idx"] < len(state["history"]) - 1:
+                    state["h_idx"] += 1
+                    state["msg"] = state["history"][-(state["h_idx"] + 1)]
+                    state["pos"] = len(state["msg"])
+            elif ch2 == b'P': # Down
+                if state["h_idx"] > 0:
+                    state["h_idx"] -= 1
+                    state["msg"] = state["history"][-(state["h_idx"] + 1)]
+                    state["pos"] = len(state["msg"])
+                elif state["h_idx"] == 0:
+                    state["h_idx"] = -1
+                    state["msg"] = ""; state["pos"] = 0
+            elif ch2 == b'S': # Delete
+                if state["pos"] < len(state["msg"]):
+                    state["msg"] = state["msg"][:state["pos"]] + state["msg"][state["pos"]+1:]
+            redraw()
+
+        # Enter
+        elif ch == b'\r':
+            if state["msg"].strip():
+                state["history"].append(state["msg"])
+            ser.write((state["msg"] + '\r\n').encode())
+            print()
+            state["msg"] = ""; state["pos"] = 0; state["h_idx"] = -1
+            sys.stdout.write("> "); sys.stdout.flush()
+
+        # Backspace
+        elif ch == b'\x08':
+            if state["pos"] > 0:
+                state["msg"] = state["msg"][:state["pos"]-1] + state["msg"][state["pos"]:]
+                state["pos"] -= 1
+                redraw()
+
+        else:
+            try:
+                char = ch.decode()
+                state["msg"] = state["msg"][:state["pos"]] + char + state["msg"][state["pos"]:]
+                state["pos"] += 1
+                redraw()
+            except: pass
+
 ser.close()
-print("\nConnection terminated.")
+print("\n--- Connection terminated. ---")
