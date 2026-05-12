@@ -3,19 +3,19 @@ import edge_tts
 import os
 
 anonslar = {
-    "001": "Hoşgeldiniz.",
-    "002": "Kapı açılıyor.",
-    "003": "Kapı kilitleniyor.",
-    "004": "Kapı kapanıyor. Kapıyı kilitlemek için lütfen sensöre dokununuz",
-    "005": "Dolu.",
+    "001": "Hoşgeldiniz",
+    "002": "Kapı açılıyor",
+    "003": "Kapı kilitleniyor",
+    "004": "Kapı kapanıyor, kapıyı kilitlemek için lütfen sensöre dokununuz",
+    "005": "Meşgul",
 }
 
 voices = {
-    "001": "Welcome.",
+    "001": "Welcome",
     "002": "Door opening.",
     "003": "Door locking",
-    "004": "Door closing. Touch the sensor to lock the door.",
-    "005": "Full.",
+    "004": "Door closing, touch the sensor to lock the door",
+    "005": "Occupied",
 }
 
 async def generate_tr_anonslar():
