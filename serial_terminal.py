@@ -6,7 +6,7 @@ import msvcrt
 import time
 
 # PORT = 'COM7'
-PORT = 'COM25'
+PORT = 'COM23'
 BAUD = 115200
 
 ports = serial.tools.list_ports.comports()

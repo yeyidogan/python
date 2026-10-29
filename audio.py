@@ -8,6 +8,9 @@ anonslar = {
     "003": "Kapı kilitleniyor",
     "004": "Kapı kapanıyor, kapıyı kilitlemek için lütfen sensöre dokununuz",
     "005": "Meşgul",
+    "085": "Kapı 5 dakika sonra açılacak",
+    "083": "Kapı 3 dakika sonra açılacak",
+    "081": "Kapı 1 dakika sonra açılacak",
 }
 
 voices = {
@@ -16,6 +19,9 @@ voices = {
     "003": "Door locking",
     "004": "Door closing, touch the sensor to lock the door",
     "005": "Occupied",
+    "085": "The door opens in 5 minutes",
+    "083": "The door opens in 3 minutes",
+    "081": "The door opens in 1 minute",
 }
 
 async def generate_tr_anonslar():
