@@ -68,6 +68,40 @@ def unpack_value(o, data):
     return int.from_bytes(data, "little") if 0 < len(data) <= 8 else data.hex()
 
 
+def encode_value(o, value, size):
+    if not 1 <= size <= 4:
+        raise ValueError("Expedited SDO writes must be 1-4 bytes")
+    type_code = o.get("type")
+    fmt = TYPE_FMT.get(type_code)
+    if type_code == 0x09:
+        raise ValueError("String SDO writes are not supported")
+    if fmt:
+        code, expected_size = fmt
+        if expected_size != size:
+            raise ValueError(f"EDS type requires {expected_size} bytes")
+        if code == "f":
+            parsed = float(value.strip())
+        else:
+            parsed = num(value, None)
+            if parsed is None:
+                raise ValueError("Enter a valid integer value")
+            if code == "?" and parsed not in (0, 1):
+                raise ValueError("Boolean values must be 0 or 1")
+        try:
+            return struct.pack("<" + code, parsed)
+        except (OverflowError, struct.error) as e:
+            raise ValueError(f"Value does not fit the EDS type: {e}") from e
+    if type_code not in (None, 0):
+        raise ValueError(f"EDS datatype 0x{type_code:02X} is not supported for writes")
+    parsed = num(value, None)
+    if parsed is None:
+        raise ValueError("Enter a valid integer value")
+    try:
+        return parsed.to_bytes(size, "little", signed=False)
+    except OverflowError as e:
+        raise ValueError(f"Value does not fit in {size} bytes") from e
+
+
 def decode_sdo(d, resp):
     if not d:
         return ""
@@ -153,25 +187,38 @@ class Link:
         self.bus.send(msg)
         self.rx.put((time.time(), "Tx", msg))  # gönderilenler de trace'te görünsün
 
-    def txn(self, node, payload, timeout=1.0):
+    def txn(self, node, payload, timeout=1.0, expected=None):
         while not self.sdo.empty():
             self.sdo.get_nowait()
         self.send(0x600 + node, payload)
-        m = self.sdo.get(timeout=timeout)
-        while m.arbitration_id != 0x580 + node:
-            m = self.sdo.get(timeout=timeout)
-        d = bytes(m.data)
-        if d[0] == 0x80:
-            raise IOError(f"SDO abort 0x{struct.unpack('<I', d[4:8])[0]:08X}")
-        return d
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise queue.Empty
+            m = self.sdo.get(timeout=remaining)
+            if m.arbitration_id != 0x580 + node:
+                continue
+            d = bytes(m.data)
+            if len(d) != 8:
+                raise IOError("Malformed SDO response")
+            if expected and (int.from_bytes(d[1:3], "little"), d[3]) != expected:
+                continue
+            if d[0] == 0x80:
+                raise IOError(f"SDO abort 0x{struct.unpack('<I', d[4:8])[0]:08X}")
+            return d
 
     def sdo_read(self, node, idx, sub):
-        d = self.txn(node, struct.pack("<BHB4x", 0x40, idx, sub))
+        d = self.txn(node, struct.pack("<BHB4x", 0x40, idx, sub), expected=(idx, sub))
+        if d[0] >> 5 != 2:
+            raise IOError("Unexpected SDO upload response")
         if d[0] & 0x02:  # expedited
             return d[4:4 + (4 - ((d[0] >> 2) & 3) if d[0] & 1 else 4)]
         out, t = b"", 0
         while True:  # segmented
             r = self.txn(node, bytes([0x60 | (t << 4)]) + bytes(7))
+            if r[0] >> 5 or ((r[0] >> 4) & 1) != t:
+                raise IOError("Unexpected SDO segment response")
             out += r[1:1 + 7 - ((r[0] >> 1) & 7)]
             if r[0] & 1:
                 return out
@@ -181,7 +228,9 @@ class Link:
         if not 1 <= len(data) <= 4:
             raise ValueError("Bu sürüm yalnızca 1-4 bayt yazar")
         cmd = 0x23 | ((4 - len(data)) << 2)
-        self.txn(node, struct.pack("<BHB", cmd, idx, sub) + data.ljust(4, b"\0"))
+        response = self.txn(node, struct.pack("<BHB", cmd, idx, sub) + data.ljust(4, b"\0"), expected=(idx, sub))
+        if response[0] != 0x60:
+            raise IOError("Unexpected SDO download response")
 
 
 class App:
@@ -193,6 +242,7 @@ class App:
         s.ch, s.br = tk.StringVar(value="PCAN_USBBUS1"), tk.StringVar(value="125k")
         s.node, s.idx, s.sub = tk.StringVar(value="20"), tk.StringVar(value="1000"), tk.StringVar(value="0")
         s.size, s.val, s.res = tk.StringVar(value="auto"), tk.StringVar(), tk.StringVar()
+        s.sdo_results, s.sdo_busy = queue.Queue(), False
 
         def row():
             f = ttk.Frame(r)
@@ -217,7 +267,10 @@ class App:
         lab(f, "SDO Index (hex)"); ent(f, s.idx, 9); lab(f, "Sub (hex)"); ent(f, s.sub, 4)
         lab(f, "Bayt"); ttk.Combobox(f, textvariable=s.size, values=["auto", "1", "2", "4"], width=5, state="readonly").pack(side="left")
         lab(f, "Value (dec / 0x)"); ent(f, s.val, 14)
-        btn(f, "Read", s.read); btn(f, "Write", s.write)
+        s.read_btn = ttk.Button(f, text="Read", command=s.read)
+        s.read_btn.pack(side="left", padx=2)
+        s.write_btn = ttk.Button(f, text="Write", command=s.write)
+        s.write_btn.pack(side="left", padx=2)
         ttk.Label(f, textvariable=s.res, foreground="#0a5").pack(side="left", padx=10)
 
         body = ttk.PanedWindow(r, orient="horizontal")
@@ -285,11 +338,13 @@ class App:
         t = s.target()
         if not t: return
         idx, sub, o = t
-        try:
-            d = s.link.sdo_read(s.nid(), idx, sub)
-            s.res.set(f"{d.hex(' ').upper()}  =  {unpack_value(o, d)}")
-        except queue.Empty: s.res.set("Timeover (no answer)")
-        except Exception as e: s.res.set(str(e))
+        node = s.nid()
+
+        def work():
+            d = s.link.sdo_read(node, idx, sub)
+            return f"{d.hex(' ').upper()}  =  {unpack_value(o, d)}"
+
+        s.start_sdo(work)
 
     def write(s):
         if not s.need_bus(True): return
@@ -298,13 +353,48 @@ class App:
         idx, sub, o = t
         try:
             n = int(s.size.get()) if s.size.get() != "auto" else (TYPE_FMT.get(o.get("type"), (0, 4))[1])
-            v = num(s.val.get())
-            s.link.sdo_write(s.nid(), idx, sub, (v & ((1 << (8 * n)) - 1)).to_bytes(n, "little"))
-            s.res.set("Written (OK)")
-        except queue.Empty: s.res.set("Timeover (no answer)")
-        except Exception as e: s.res.set(str(e))
+            data = encode_value(o, s.val.get(), n)
+        except Exception as e:
+            s.res.set(str(e))
+            return
+        node = s.nid()
+
+        def work():
+            s.link.sdo_write(node, idx, sub, data)
+            return "Written (OK)"
+
+        s.start_sdo(work)
+
+    def start_sdo(s, work):
+        if s.sdo_busy:
+            return
+        s.sdo_busy = True
+        s.res.set("Working...")
+        for button in (s.cbtn, s.read_btn, s.write_btn):
+            button.state(["disabled"])
+
+        def run():
+            try:
+                result = work()
+            except queue.Empty:
+                s.sdo_results.put("Timeover (no answer)")
+            except Exception as e:
+                s.sdo_results.put(str(e))
+            else:
+                s.sdo_results.put(result)
+
+        threading.Thread(target=run, daemon=True).start()
 
     def poll(s):
+        try:
+            result = s.sdo_results.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            s.sdo_busy = False
+            s.res.set(result)
+            for button in (s.cbtn, s.read_btn, s.write_btn):
+                button.state(["!disabled"])
         for _ in range(300):
             try: ts, way, m = s.link.rx.get_nowait()
             except queue.Empty: break
@@ -328,6 +418,9 @@ class App:
                 w = csv.writer(f); w.writerow(["time", "dir", "id", "dlc", "data", "decoded"]); w.writerows(s.rows)
 
     def quit(s):
+        if s.sdo_busy:
+            messagebox.showwarning("Operation in progress", "Wait for the SDO operation to finish.")
+            return
         if s.link.bus: s.link.close()
         s.root.destroy()
 
