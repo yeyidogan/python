@@ -109,6 +109,13 @@ def encode_value(o, value, size):
         raise ValueError(f"Value does not fit in {size} bytes") from e
 
 
+def write_size_for_object(o):
+    fmt = TYPE_FMT.get(o.get("type"))
+    if fmt and fmt[1] in (1, 2, 4):
+        return str(fmt[1])
+    return "auto"
+
+
 def frame_kind(description):
     for kind in FRAME_KINDS[1:-1]:
         if description.startswith(kind):
@@ -298,17 +305,20 @@ class App:
         except (OSError, configparser.Error) as e:
             s.settings_error = str(e)
         saved = settings["connection"] if settings.has_section("connection") else {}
+        saved_eds_path = saved.get("eds_path", "")
+        s.eds_path = ""
         r = s.root = tk.Tk()
         r.title("Mini CANopen Analyzer - PCAN-USB")
         r.geometry("1150x680")
         s.ch, s.br = tk.StringVar(value=saved.get("channel", "PCAN_USBBUS1")), tk.StringVar(value=saved.get("bitrate", "125k"))
-        s.node, s.idx, s.sub = tk.StringVar(value="20"), tk.StringVar(value="1000"), tk.StringVar(value="0")
+        s.node, s.idx, s.sub = tk.StringVar(value=saved.get("node", "0")), tk.StringVar(value="1000"), tk.StringVar(value="0")
         s.size, s.val, s.res = tk.StringVar(value="auto"), tk.StringVar(), tk.StringVar()
         s.sdo_results, s.sdo_busy = queue.Queue(), False
         s.filter_text = tk.StringVar()
         s.filter_direction = tk.StringVar(value="All")
         s.filter_kind = tk.StringVar(value="All")
         s.tpdo_num = tk.StringVar(value="1")
+        s.can_buttons = []
 
         def row():
             f = ttk.Frame(r)
@@ -325,8 +335,11 @@ class App:
         s.cbtn = ttk.Button(f, text="Connect", command=s.toggle)
         s.cbtn.pack(side="left", padx=6)
         btn(f, "Load EDS", s.load_eds)
+        s.unload_eds_btn = ttk.Button(f, text="Unload EDS", command=s.unload_eds, state="disabled")
+        s.unload_eds_btn.pack(side="left", padx=2)
         s.map_btn = ttk.Button(f, text="Read TPDO map", command=s.read_tpdo_map)
         s.map_btn.pack(side="left", padx=2)
+        s.can_buttons.append(s.map_btn)
         ttk.Combobox(f, textvariable=s.tpdo_num, values=["1", "2", "3", "4"], width=3, state="readonly").pack(side="left")
         btn(f, "CSV Export", s.save_csv); btn(f, "JSON Export", s.save_json); btn(f, "Clear", s.clear)
         s.pause_btn = ttk.Button(f, text="Pause", command=s.toggle_pause)
@@ -339,15 +352,20 @@ class App:
         f = row()
         lab(f, "Node ID (hex)"); ent(f, s.node, 5)
         for name, code in NMT_CMDS.items():
-            btn(f, name, lambda c=code: s.nmt(c))
+            button = ttk.Button(f, text=name, command=lambda c=code: s.nmt(c))
+            button.pack(side="left", padx=2)
+            s.can_buttons.append(button)
         f = row()
         lab(f, "SDO Index (hex)"); ent(f, s.idx, 9); lab(f, "Sub (hex)"); ent(f, s.sub, 4)
         lab(f, "Bytes"); ttk.Combobox(f, textvariable=s.size, values=["auto", "1", "2", "4"], width=5, state="readonly").pack(side="left")
         lab(f, "Value (dec / 0x)"); ent(f, s.val, 14)
         s.read_btn = ttk.Button(f, text="Read", command=s.read)
         s.read_btn.pack(side="left", padx=2)
+        s.can_buttons.append(s.read_btn)
         s.write_btn = ttk.Button(f, text="Write", command=s.write)
         s.write_btn.pack(side="left", padx=2)
+        s.can_buttons.append(s.write_btn)
+        s.set_can_controls(False)
         ttk.Label(f, textvariable=s.res, foreground="#0a5").pack(side="left", padx=10)
 
         body = ttk.PanedWindow(r, orient="horizontal")
@@ -364,10 +382,17 @@ class App:
         body.add(s.tr, weight=3)
         r.protocol("WM_DELETE_WINDOW", s.quit)
         r.after(50, s.poll)
+        if saved_eds_path:
+            r.after_idle(lambda: s.load_eds_file(saved_eds_path))
         if s.settings_error:
             r.after_idle(lambda: messagebox.showwarning("Settings", f"Could not load settings: {s.settings_error}"))
 
     def nid(s): return hexnum(s.node.get(), -1)
+
+    def set_can_controls(s, enabled):
+        state = "!disabled" if enabled else "disabled"
+        for button in s.can_buttons:
+            button.state([state])
 
     def toggle(s):
         if s.link.bus:
@@ -375,10 +400,15 @@ class App:
                 s.link.close()
             except can.CanError as e:
                 messagebox.showerror("Disconnect Error", str(e))
+                return
+            s.set_can_controls(False)
             s.cbtn.config(text="Connect"); return
         try:
-            s.link.open(s.ch.get(), BITRATES[s.br.get()]); s.cbtn.config(text="Disconnect")
+            s.link.open(s.ch.get(), BITRATES[s.br.get()])
+            s.set_can_controls(True)
+            s.cbtn.config(text="Disconnect")
         except Exception as e:
+            s.set_can_controls(False)
             messagebox.showerror("Connection Error", f"{e}\n\nCheck PCAN driver!")
 
     def need_bus(s, sdo=False):
@@ -409,20 +439,44 @@ class App:
     def load_eds(s):
         p = filedialog.askopenfilename(filetypes=[("EDS", "*.eds *.EDS"), ("All", "*.*")])
         if not p: return
-        s.eds = EDS(p)
+        s.load_eds_file(p)
+
+    def load_eds_file(s, path):
+        if not Path(path).is_file():
+            messagebox.showwarning("EDS Not Found", f"The saved EDS file does not exist:\n{path}")
+            return False
+        try:
+            eds = EDS(path)
+        except (OSError, configparser.Error, ValueError) as e:
+            messagebox.showerror("EDS Load Error", f"Could not load EDS file:\n{e}")
+            return False
         s.od.delete(*s.od.get_children())
-        for idx in sorted({k[0] for k in s.eds.objs}):
-            o = s.eds.objs.get((idx, None)) or s.eds.objs.get((idx, 0), {})
+        for idx in sorted({k[0] for k in eds.objs}):
+            o = eds.objs.get((idx, None)) or eds.objs.get((idx, 0), {})
             s.od.insert("", "end", iid=f"{idx:04X}_", text=f"0x{idx:04X}", values=(o.get("name", ""), o.get("acc", "")))
-            for sub in sorted(k[1] for k in s.eds.objs if k[0] == idx and k[1] is not None):
-                so = s.eds.objs[(idx, sub)]
+            for sub in sorted(k[1] for k in eds.objs if k[0] == idx and k[1] is not None):
+                so = eds.objs[(idx, sub)]
                 s.od.insert(f"{idx:04X}_", "end", iid=f"{idx:04X}_{sub}", text=f"sub {sub}", values=(so["name"], so["acc"]))
+        s.eds = eds
+        s.eds_path = str(Path(path).resolve())
+        s.unload_eds_btn.state(["!disabled"])
+        return True
+
+    def unload_eds(s):
+        s.eds = None
+        s.eds_path = ""
+        s.od.delete(*s.od.get_children())
+        s.size.set("auto")
+        s.unload_eds_btn.state(["disabled"])
 
     def pick(s, _e):
         iid = s.od.focus()
         if "_" in iid:
             i, sub = iid.split("_")
             s.idx.set(i); s.sub.set(sub or "0")
+            if s.eds:
+                obj = s.eds.lookup(hexnum(i), hexnum(sub or "0"))
+                s.size.set(write_size_for_object(obj))
 
     def target(s):
         idx, sub = hexnum(s.idx.get()), hexnum(s.sub.get())
@@ -471,8 +525,8 @@ class App:
             return
         s.sdo_busy = True
         s.res.set("Working...")
-        for button in (s.cbtn, s.read_btn, s.write_btn, s.map_btn):
-            button.state(["disabled"])
+        s.cbtn.state(["disabled"])
+        s.set_can_controls(False)
 
         def run():
             try:
@@ -497,14 +551,15 @@ class App:
             if maps:
                 s.tpdo_maps.update(maps)
                 s.refresh_trace()
-            for button in (s.cbtn, s.read_btn, s.write_btn, s.map_btn):
-                button.state(["!disabled"])
+            s.cbtn.state(["!disabled"])
+            s.set_can_controls(bool(s.link.bus))
         try:
             error = s.link.errors.get_nowait()
         except queue.Empty:
             pass
         else:
             s.link.close()
+            s.set_can_controls(False)
             s.cbtn.config(text="Connect")
             messagebox.showerror("CAN Receive Error", error)
         for _ in range(300):
@@ -590,7 +645,12 @@ class App:
             except can.CanError as e:
                 messagebox.showerror("Disconnect Error", str(e))
         settings = configparser.ConfigParser()
-        settings["connection"] = {"channel": s.ch.get(), "bitrate": s.br.get()}
+        settings["connection"] = {
+            "channel": s.ch.get(),
+            "bitrate": s.br.get(),
+            "node": s.node.get(),
+            "eds_path": s.eds_path,
+        }
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 settings.write(f)
